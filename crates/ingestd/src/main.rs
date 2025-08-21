@@ -1,19 +1,29 @@
-use std::{env, fs, net::SocketAddr};
+use std::{env, fs, net::SocketAddr, time::Duration};
 
 use agents::{binance::BinanceAdapter, Adapter};
 use api::EventBus;
 use ingest_core::config::Config;
 use ops::OpsServer;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg_path = env::args().nth(1).expect("config path required");
     let data = fs::read_to_string(cfg_path)?;
-    let cfg: Config = toml::from_str(&data)?;
+    let cfg = Config::from_str(&data)?;
 
     let bus = EventBus::new(1024);
     let publisher = bus.publisher();
+    let consumer = bus.subscribe();
+    let log_handle = tokio::spawn(async move {
+        loop {
+            if let Some(evt) = consumer.poll() {
+                println!("event: {:?}", evt);
+            } else {
+                sleep(Duration::from_millis(100)).await;
+            }
+        }
+    });
 
     let ops = OpsServer::new();
     let ops_addr: SocketAddr = "127.0.0.1:3000".parse().unwrap();
@@ -36,6 +46,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let _ = tokio::join!(ops_handle, forward_handle);
+    let _ = tokio::join!(ops_handle, forward_handle, log_handle);
     Ok(())
 }
