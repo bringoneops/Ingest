@@ -9,5 +9,4 @@ ingest-core = { path = "../core" }
 agents = { path = "../agents" }
 api = { path = "../api" }
 ops = { path = "../ops" }
-toml = "0.8"
 

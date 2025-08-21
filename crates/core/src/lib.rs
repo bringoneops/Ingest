@@ -24,6 +24,46 @@ pub mod config {
         pub name: String,
         pub symbols: Vec<String>,
     }
+
+    impl Config {
+        /// Parse configuration from TOML, supporting both the simple `[[venues]]`
+        /// format and the more advanced `[venue.<name>]` style used by
+        /// `config/binance.toml`.
+        pub fn from_str(data: &str) -> Result<Self, toml::de::Error> {
+            // First attempt to deserialize using the simple struct format.
+            if let Ok(cfg) = toml::from_str::<Config>(data) {
+                return Ok(cfg);
+            }
+
+            // Fallback to parsing `[venue.*]` tables manually.
+            let value: toml::Value = toml::from_str(data)?;
+            if let Some(table) = value.get("venue").and_then(|v| v.as_table()) {
+                let mut venues = Vec::new();
+                for (name, cfg) in table {
+                    if cfg
+                        .get("enabled")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                    {
+                        let symbols = match cfg.get("symbols") {
+                            Some(toml::Value::Array(arr)) => arr
+                                .iter()
+                                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        venues.push(VenueConfig {
+                            name: name.clone(),
+                            symbols,
+                        });
+                    }
+                }
+                return Ok(Config { venues });
+            }
+
+            Ok(Config { venues: Vec::new() })
+        }
+    }
 }
 
 pub mod error {
@@ -47,10 +87,33 @@ pub fn canonical_symbol(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_symbol;
+    use super::{canonical_symbol, config::Config};
 
     #[test]
     fn symbol_uppercase() {
         assert_eq!(canonical_symbol("btcusdt"), "BTCUSDT");
+    }
+
+    #[test]
+    fn parse_simple_config() {
+        let data = "[[venues]]\nname=\"binance\"\nsymbols=[\"BTCUSDT\"]\n";
+        let cfg = Config::from_str(data).unwrap();
+        assert_eq!(cfg.venues.len(), 1);
+        assert_eq!(cfg.venues[0].name, "binance");
+    }
+
+    #[test]
+    fn parse_binance_style_config() {
+        let data = r#"
+[venue.binance_spot]
+enabled = true
+symbols = ["BTCUSDT", "ETHUSDT"]
+
+[venue.binance_usdm]
+enabled = false
+"#;
+        let cfg = Config::from_str(data).unwrap();
+        assert_eq!(cfg.venues.len(), 1);
+        assert_eq!(cfg.venues[0].name, "binance_spot");
     }
 }

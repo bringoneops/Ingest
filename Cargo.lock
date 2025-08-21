@@ -826,6 +826,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "toml",
 ]
 
 [[package]]
@@ -837,7 +838,6 @@ dependencies = [
  "ingest-core",
  "ops",
  "tokio",
- "toml",
 ]
 
 [[package]]
