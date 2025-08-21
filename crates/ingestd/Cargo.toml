@@ -1,0 +1,13 @@
+[package]
+name = "ingestd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+ingest-core = { path = "../core" }
+agents = { path = "../agents" }
+api = { path = "../api" }
+ops = { path = "../ops" }
+toml = "0.8"
+
