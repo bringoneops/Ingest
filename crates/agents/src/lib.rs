@@ -1,26 +1,17 @@
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use ingest_core::{
-    canonical_symbol,
-    config::VenueConfig,
-    event::NormalizedEvent,
-    error::IngestError,
+    canonical_symbol, config::VenueConfig, error::IngestError, event::NormalizedEvent,
 };
 use tokio::sync::mpsc::Sender;
 
-pub mod spec {
-    use serde::Deserialize;
-
-    #[derive(Debug, Deserialize)]
-    pub struct AdapterSpec {
-        pub name: String,
-        pub endpoints: Vec<String>,
-    }
-}
-
 #[async_trait]
 pub trait Adapter: Send + Sync {
-    async fn connect(&self, cfg: VenueConfig, tx: Sender<NormalizedEvent>) -> Result<(), IngestError>;
+    async fn connect(
+        &self,
+        cfg: VenueConfig,
+        tx: Sender<NormalizedEvent>,
+    ) -> Result<(), IngestError>;
 }
 
 /// A helper macro that implements Adapter for empty structs for prototyping.
@@ -49,18 +40,7 @@ macro_rules! simple_adapter {
 pub mod binance {
     use super::*;
     use chrono::{DateTime, Utc};
-    use serde::Deserialize;
     use tokio_tungstenite::connect_async;
-
-    #[derive(Debug, Deserialize)]
-    pub struct BinanceSpec {
-        pub name: String,
-        pub endpoints: Vec<String>,
-    }
-
-    pub fn spec() -> BinanceSpec {
-        toml::from_str(include_str!("../specs/binance_spot.toml")).expect("valid spec")
-    }
 
     /// Adapter implementation for streaming data from Binance.
     pub struct BinanceAdapter;
@@ -72,7 +52,10 @@ pub mod binance {
             cfg: VenueConfig,
             tx: Sender<NormalizedEvent>,
         ) -> Result<(), IngestError> {
-            let spec = spec();
+            // Only trade channel is implemented; skip if disabled.
+            if !cfg.channels.trades {
+                return Ok(());
+            }
 
             // Determine streams per symbol (trade channel only for now).
             // e.g. btcusdt@trade/ethusdt@trade
@@ -85,12 +68,10 @@ pub mod binance {
                 return Ok(());
             }
 
-            // For simplicity we use the first endpoint. Multiple venues can
-            // spawn additional adapter tasks with different cfg.name values.
-            let base = spec
-                .endpoints
-                .get(0)
-                .cloned()
+            // Use ws_base from config or default to public endpoint.
+            let base = cfg
+                .ws_base
+                .clone()
                 .unwrap_or_else(|| "wss://stream.binance.com:9443/stream".to_string());
             let url = if streams.len() == 1 {
                 format!("{}/{}", base.trim_end_matches('/'), streams[0])
@@ -102,8 +83,9 @@ pub mod binance {
                 )
             };
 
-            let (ws_stream, _) =
-                connect_async(&url).await.map_err(|e| IngestError::Validation(e.to_string()))?;
+            let (ws_stream, _) = connect_async(&url)
+                .await
+                .map_err(|e| IngestError::Validation(e.to_string()))?;
             let (_, mut read) = ws_stream.split();
 
             while let Some(msg) = read.next().await {
@@ -111,7 +93,9 @@ pub mod binance {
                 if !msg.is_text() {
                     continue;
                 }
-                let text = msg.into_text().map_err(|e| IngestError::Validation(e.to_string()))?;
+                let text = msg
+                    .into_text()
+                    .map_err(|e| IngestError::Validation(e.to_string()))?;
                 let value: serde_json::Value = serde_json::from_str(&text)?;
 
                 // Combined stream messages include a `data` field; otherwise the
@@ -140,8 +124,7 @@ pub mod binance {
                     (value, sym, t_ms)
                 };
 
-                let ts = DateTime::<Utc>::from_timestamp_millis(ts)
-                    .unwrap_or_else(|| Utc::now());
+                let ts = DateTime::<Utc>::from_timestamp_millis(ts).unwrap_or_else(|| Utc::now());
 
                 let event = NormalizedEvent {
                     venue: cfg.name.clone(),

@@ -23,6 +23,30 @@ pub mod config {
     pub struct VenueConfig {
         pub name: String,
         pub symbols: Vec<String>,
+        #[serde(default)]
+        pub ws_base: Option<String>,
+        #[serde(default)]
+        pub rest_base: Option<String>,
+        #[serde(default)]
+        pub channels: ChannelConfig,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct ChannelConfig {
+        #[serde(default = "default_trades")]
+        pub trades: bool,
+    }
+
+    const fn default_trades() -> bool {
+        true
+    }
+
+    impl Default for ChannelConfig {
+        fn default() -> Self {
+            Self {
+                trades: default_trades(),
+            }
+        }
     }
 
     impl Config {
@@ -52,9 +76,25 @@ pub mod config {
                                 .collect(),
                             _ => Vec::new(),
                         };
+                        let ws_base = cfg
+                            .get("ws_base")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let rest_base = cfg
+                            .get("rest_base")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                        let channels: ChannelConfig = cfg
+                            .get("channels")
+                            .cloned()
+                            .map(|v| v.try_into().unwrap_or_default())
+                            .unwrap_or_default();
                         venues.push(VenueConfig {
                             name: name.clone(),
                             symbols,
+                            ws_base,
+                            rest_base,
+                            channels,
                         });
                     }
                 }
@@ -107,7 +147,12 @@ mod tests {
         let data = r#"
 [venue.binance_spot]
 enabled = true
+ws_base = "wss://example"
+rest_base = "https://rest.example"
 symbols = ["BTCUSDT", "ETHUSDT"]
+
+[venue.binance_spot.channels]
+trades = true
 
 [venue.binance_usdm]
 enabled = false
@@ -115,5 +160,7 @@ enabled = false
         let cfg = Config::from_str(data).unwrap();
         assert_eq!(cfg.venues.len(), 1);
         assert_eq!(cfg.venues[0].name, "binance_spot");
+        assert_eq!(cfg.venues[0].ws_base.as_deref(), Some("wss://example"));
+        assert!(cfg.venues[0].channels.trades);
     }
 }
