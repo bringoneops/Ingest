@@ -1,0 +1,189 @@
+# ===========================
+# Binance Ingestion Config (ALL symbols capable)
+# Scope: Ingestion-only + Embedded Normalizer (no durability, no fanout)
+# ===========================
+
+[ingestor]
+shard_count = 4
+queue_bound = 65536
+recv_coalesce_us = 0
+cpu_pinning = true
+numa_aware = true
+
+[ops]
+http_bind = "0.0.0.0:8080"
+metrics_enabled = true
+profiling_feature_enabled = false
+
+[security]
+tls = true
+cert_pinning = false
+secrets_from_env = true
+
+[debug_emitter]
+enabled = true
+mode = "stdout"
+path = "logs/binance-normalized.jsonl"
+
+[normalizer]
+emit_l2_full_every_secs = 30
+max_book_levels = 50
+dedup_window_ms = 200
+enforce_lot_notional = true
+timestamp_policy = "event_recv_proc"
+
+# =========================================
+# GLOBAL SYMBOL DISCOVERY (applies to all Binance venues unless overridden)
+# Engine behavior:
+#   - If symbols = "ALL", fetch exchangeInfo and build the symbol list dynamically.
+#   - Apply filters: trading status, quote whitelist, blacklist, liquidity thresholds, and regex includes/excludes.
+# =========================================
+[discovery]
+enabled = true
+quote_whitelist = ["USDT","USD","FDUSD","USDC"]   # prioritize stable-quote markets
+include_low_liquidity = true                      # keep illiquid pairs too
+min_24h_usd_volume = 0.0                          # set >0 to prune very illiquid symbols (applies where venue API supports it)
+symbol_include_regex = ""                         # e.g. "^(BTC|ETH).*$"
+symbol_exclude_regex = ".*(UP|DOWN|BEAR|BULL)$"   # exclude leveraged tokens etc.
+symbol_blacklist = ["BTCSTUSDT"]                  # explicit exclusions
+symbol_whitelist = []                             # always include, even if filtered
+
+# =========================================
+# VENUE: Binance SPOT
+# symbols = "ALL" triggers dynamic discovery via /api/v3/exchangeInfo + filters above
+# =========================================
+[venue.binance_spot]
+enabled   = true
+kind      = "spot"
+ws_base   = "wss://stream.binance.com:9443/stream"
+rest_base = "https://api.binance.com"
+
+symbols = "ALL"   # <- dynamic discovery (overrides static list)
+
+[venue.binance_spot.channels]
+trades     = true
+book_diff  = { enabled=true, speed="100ms" }
+book_snap  = { enabled=true, limit=5000 }
+ticker     = { enabled=true, mode="!ticker@arr" }
+klines     = { enabled=true, intervals=["1m","5m","1h","1d"] }
+system     = { enabled=true }
+reference  = { enabled=true }
+liquidations = { enabled=false }
+
+[venue.binance_spot.rest_endpoints]
+exchange_info = "/api/v3/exchangeInfo"
+depth_snap    = "/api/v3/depth?symbol=$SYMBOL&limit=$LIMIT"
+klines        = "/api/v3/klines?symbol=$SYMBOL&interval=$INTERVAL&limit=1000"
+system_status = "/sapi/v1/system/status"
+
+# =========================================
+# VENUE: Binance USDT-M Perpetual Futures (Perps)
+# symbols = "ALL" uses /fapi/v1/exchangeInfo + filters; derivatives-only flags applied automatically
+# =========================================
+[venue.binance_usdm]
+enabled   = true
+kind      = "futures_usdtm"
+ws_base   = "wss://fstream.binance.com/stream"
+rest_base = "https://fapi.binance.com"
+
+symbols = "ALL"   # <- dynamic discovery
+
+[venue.binance_usdm.channels]
+trades       = true
+book_diff    = { enabled=true, speed="100ms" }
+book_snap    = { enabled=true, limit=5000 }
+ticker       = { enabled=true, mode="!ticker@arr" }
+klines       = { enabled=true, intervals=["1m","5m","1h","1d"] }
+mark_price   = { enabled=true, cadence="1s" }
+funding      = { enabled=true, source="ws+rest" }
+liquidations = { enabled=true, mode="!forceOrder@arr" }
+system       = { enabled=true }
+reference    = { enabled=true }
+derivatives_meta = { enabled=true }
+
+[venue.binance_usdm.rest_endpoints]
+exchange_info = "/fapi/v1/exchangeInfo"
+depth_snap    = "/fapi/v1/depth?symbol=$SYMBOL&limit=$LIMIT"
+klines        = "/fapi/v1/klines?symbol=$SYMBOL&interval=$INTERVAL&limit=1500"
+funding_hist  = "/fapi/v1/fundingRate?symbol=$SYMBOL&limit=1000"
+mark_price    = "/fapi/v1/premiumIndex?symbol=$SYMBOL"
+system_status = "/fapi/v1/exchangeInfo"
+
+# =========================================
+# VENUE: Binance COIN-M Delivery Futures (optional breadth)
+# =========================================
+[venue.binance_coinm]
+enabled   = true
+kind      = "futures_coinm"
+ws_base   = "wss://dstream.binance.com/stream"
+rest_base = "https://dapi.binance.com"
+
+symbols = "ALL"   # <- dynamic discovery
+
+[venue.binance_coinm.channels]
+trades       = true
+book_diff    = { enabled=true, speed="100ms" }
+book_snap    = { enabled=true, limit=5000 }
+ticker       = { enabled=true, mode="!ticker@arr" }
+klines       = { enabled=true, intervals=["1m","5m","1h","1d"] }
+mark_price   = { enabled=true, cadence="1s" }
+funding      = { enabled=true, source="ws+rest" }
+liquidations = { enabled=true, mode="!forceOrder@arr" }
+system       = { enabled=true }
+reference    = { enabled=true }
+derivatives_meta = { enabled=true }
+
+[venue.binance_coinm.rest_endpoints]
+exchange_info = "/dapi/v1/exchangeInfo"
+depth_snap    = "/dapi/v1/depth?symbol=$SYMBOL&limit=$LIMIT"
+klines        = "/dapi/v1/klines?symbol=$SYMBOL&interval=$INTERVAL&limit=1500"
+funding_hist  = "/dapi/v1/fundingRate?symbol=$SYMBOL&limit=1000"
+mark_price    = "/dapi/v1/premiumIndex?symbol=$SYMBOL"
+system_status = "/dapi/v1/exchangeInfo"
+
+# =========================================
+# OPTIONAL: On-chain + DEX for BNB Chain (disabled by default; enable when you have infra)
+# =========================================
+[chain.bnb]
+enabled = false
+ws_url  = "wss://bsc.your-node-provider.example/ws"
+poll_blocks_ms = 500
+poll_txs = false
+
+[chain.bnb.dex_pancakeswap]
+enabled = false
+subgraph_url = "https://api.thegraph.com/subgraphs/name/pancakeswap/exchange-v3"
+poll_pools = ["WBNB/USDT", "CAKE/USDT"]
+poll_interval_ms = 2000
+
+# =========================================
+# Rate limits, backpressure, and state-machine policies
+# =========================================
+[limits]
+ws_reconnect_backoff_ms = { min=500, max=60000, jitter=true }
+rest_rps_per_host = 8
+token_buckets = { subscribe_per_sec=5, snapshot_per_min=60 }
+
+[overload_policy]
+drop_strategy = "drop_oldest_deltas"
+downsample = { ticker=true, trades=false }
+
+[state_machine.binance_spot]
+diff_channel = "depth"
+snapshot_source = "rest"
+max_gap_seq = 1000
+resnapshot_on_crc_fail = false
+
+[state_machine.binance_usdm]
+diff_channel = "depth"
+snapshot_source = "rest"
+max_gap_seq = 1000
+resnapshot_on_crc_fail = false
+force_resubscribe_on_throttle = true
+
+[state_machine.binance_coinm]
+diff_channel = "depth"
+snapshot_source = "rest"
+max_gap_seq = 1000
+resnapshot_on_crc_fail = false
+force_resubscribe_on_throttle = true
