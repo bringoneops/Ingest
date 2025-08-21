@@ -1,0 +1,9 @@
+[package]
+name = "pipeline"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ingest-core = { path = "../core" }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }

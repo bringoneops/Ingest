@@ -1,0 +1,5 @@
+name = "binance_spot"
+endpoints = ["wss://stream.binance.com:9443/ws"]
+[channels]
+trades = "trade"
+book = "depth"
