@@ -15,6 +15,8 @@ tokio = { version = "1", features = ["rt", "macros", "sync" ] }
 chrono = { version = "0.4", features = ["serde", "clock" ] }
 serde_json = "1"
 toml = "0.8"
+tokio-tungstenite = { version = "0.21", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util = "0.3"
 
 [dependencies.proc-macro2]
 version = "1"
