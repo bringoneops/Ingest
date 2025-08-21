@@ -829,6 +829,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ingestd"
+version = "0.1.0"
+dependencies = [
+ "agents",
+ "api",
+ "ingest-core",
+ "ops",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
