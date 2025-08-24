@@ -27,6 +27,7 @@ dependencies = [
  "ingest-core",
  "proc-macro2",
  "quote",
+ "reqwest",
  "serde",
  "serde_json",
  "syn 1.0.109",

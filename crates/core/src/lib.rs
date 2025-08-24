@@ -24,17 +24,40 @@ pub mod config {
         pub name: String,
         pub symbols: Vec<String>,
         #[serde(default)]
+        pub discover: bool,
+        #[serde(default)]
         pub ws_base: Option<String>,
         #[serde(default)]
         pub rest_base: Option<String>,
         #[serde(default)]
         pub channels: ChannelConfig,
+        #[serde(default)]
+        pub discovery: Option<DiscoveryConfig>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+    pub struct DiscoveryConfig {
+        #[serde(default)]
+        pub enabled: bool,
+        #[serde(default)]
+        pub quote_whitelist: Vec<String>,
+        #[serde(default)]
+        pub symbol_blacklist: Vec<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct ChannelConfig {
         #[serde(default = "default_trades")]
         pub trades: bool,
+        #[serde(default)]
+        pub ticker: Option<TickerConfig>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct TickerConfig {
+        pub enabled: bool,
+        #[serde(default)]
+        pub mode: Option<String>,
     }
 
     const fn default_trades() -> bool {
@@ -45,6 +68,16 @@ pub mod config {
         fn default() -> Self {
             Self {
                 trades: default_trades(),
+                ticker: None,
+            }
+        }
+    }
+
+    impl Default for TickerConfig {
+        fn default() -> Self {
+            Self {
+                enabled: false,
+                mode: None,
             }
         }
     }
@@ -61,6 +94,11 @@ pub mod config {
 
             // Fallback to parsing `[venue.*]` tables manually.
             let value: toml::Value = toml::from_str(data)?;
+            let global_discovery: DiscoveryConfig = value
+                .get("discovery")
+                .cloned()
+                .map(|v| v.try_into().unwrap_or_default())
+                .unwrap_or_default();
             if let Some(table) = value.get("venue").and_then(|v| v.as_table()) {
                 let mut venues = Vec::new();
                 for (name, cfg) in table {
@@ -69,11 +107,16 @@ pub mod config {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false)
                     {
+                        let mut discover = false;
                         let symbols = match cfg.get("symbols") {
                             Some(toml::Value::Array(arr)) => arr
                                 .iter()
                                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                                 .collect(),
+                            Some(toml::Value::String(s)) if s == "ALL" => {
+                                discover = true;
+                                Vec::new()
+                            }
                             _ => Vec::new(),
                         };
                         let ws_base = cfg
@@ -89,12 +132,20 @@ pub mod config {
                             .cloned()
                             .map(|v| v.try_into().unwrap_or_default())
                             .unwrap_or_default();
+                        let discovery: Option<DiscoveryConfig> = cfg
+                            .get("discovery")
+                            .cloned()
+                            .map(|v| v.try_into().unwrap_or_default())
+                            .or_else(|| if discover { Some(global_discovery.clone()) } else { None });
+
                         venues.push(VenueConfig {
                             name: name.clone(),
                             symbols,
+                            discover,
                             ws_base,
                             rest_base,
                             channels,
+                            discovery,
                         });
                     }
                 }
@@ -162,5 +213,19 @@ enabled = false
         assert_eq!(cfg.venues[0].name, "binance_spot");
         assert_eq!(cfg.venues[0].ws_base.as_deref(), Some("wss://example"));
         assert!(cfg.venues[0].channels.trades);
+        assert!(!cfg.venues[0].discover);
+    }
+
+    #[test]
+    fn parse_all_symbols_as_discovery() {
+        let data = r#"
+[venue.binance_spot]
+enabled = true
+symbols = "ALL"
+"#;
+        let cfg = Config::from_str(data).unwrap();
+        assert_eq!(cfg.venues.len(), 1);
+        assert!(cfg.venues[0].discover);
+        assert!(cfg.venues[0].symbols.is_empty());
     }
 }
