@@ -57,14 +57,29 @@ pub mod binance {
             .ok_or_else(|| IngestError::Validation("rest_base required".into()))?;
         let url = format!("{}/exchangeInfo", base.trim_end_matches('/'));
         let client = Client::new();
-        let resp: serde_json::Value = client
+        let resp = client
             .get(&url)
             .send()
             .await
-            .map_err(|e| IngestError::Validation(e.to_string()))?
+            .map_err(|e| IngestError::Validation(format!("{}: {}", url, e)))?;
+        let resp = resp.error_for_status().map_err(|e| {
+            let status = e
+                .status()
+                .map(|s| s.as_u16().to_string())
+                .unwrap_or_else(|| "unknown".into());
+            let url = e
+                .url()
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| url.clone());
+            IngestError::Validation(format!(
+                "request to {} failed with status {}",
+                url, status
+            ))
+        })?;
+        let resp: serde_json::Value = resp
             .json()
             .await
-            .map_err(|e| IngestError::Validation(e.to_string()))?;
+            .map_err(|e| IngestError::Validation(format!("{}: {}", url, e)))?;
         let mut symbols = Vec::new();
         let include_re = if disc.quote_whitelist.is_empty() {
             None
@@ -222,6 +237,9 @@ pub mod binance {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use ingest_core::config::DiscoveryConfig;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
 
         fn base_cfg() -> VenueConfig {
             VenueConfig {
@@ -258,6 +276,70 @@ pub mod binance {
             });
             let streams = build_streams(&cfg, &cfg.symbols);
             assert!(streams.contains(&"!ticker@arr".to_string()));
+        }
+
+        async fn start_mock_server(status: u16) -> (String, tokio::task::JoinHandle<()>) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let handle = tokio::spawn(async move {
+                if let Ok((mut socket, _)) = listener.accept().await {
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let reason = match status {
+                        404 => "Not Found",
+                        451 => "Unavailable For Legal Reasons",
+                        _ => "Error",
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {} {}\r\nContent-Length: 0\r\n\r\n",
+                        status, reason
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                }
+            });
+            (format!("http://{}", addr), handle)
+        }
+
+        #[tokio::test]
+        async fn discover_symbols_reports_404() {
+            let (base, handle) = start_mock_server(404).await;
+            let mut cfg = base_cfg();
+            cfg.rest_base = Some(base.clone());
+            cfg.discovery = Some(DiscoveryConfig {
+                enabled: true,
+                quote_whitelist: vec![],
+                symbol_blacklist: vec![],
+            });
+            let err = discover_symbols(&cfg).await.unwrap_err();
+            match err {
+                IngestError::Validation(msg) => {
+                    assert!(msg.contains("404"));
+                    assert!(msg.contains(&format!("{}/exchangeInfo", base.trim_end_matches('/'))));
+                }
+                _ => panic!("expected validation error"),
+            }
+            handle.abort();
+        }
+
+        #[tokio::test]
+        async fn discover_symbols_reports_451() {
+            let (base, handle) = start_mock_server(451).await;
+            let mut cfg = base_cfg();
+            cfg.rest_base = Some(base.clone());
+            cfg.discovery = Some(DiscoveryConfig {
+                enabled: true,
+                quote_whitelist: vec![],
+                symbol_blacklist: vec![],
+            });
+            let err = discover_symbols(&cfg).await.unwrap_err();
+            match err {
+                IngestError::Validation(msg) => {
+                    assert!(msg.contains("451"));
+                    assert!(msg.contains(&format!("{}/exchangeInfo", base.trim_end_matches('/'))));
+                }
+                _ => panic!("expected validation error"),
+            }
+            handle.abort();
         }
     }
 }
