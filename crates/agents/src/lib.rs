@@ -40,8 +40,8 @@ macro_rules! simple_adapter {
 pub mod binance {
     use super::*;
     use chrono::{DateTime, Utc};
-    use tokio_tungstenite::connect_async;
     use reqwest::Client;
+    use tokio_tungstenite::connect_async;
 
     /// Adapter implementation for streaming data from Binance.
     pub struct BinanceAdapter;
@@ -71,10 +71,7 @@ pub mod binance {
                 .url()
                 .map(|u| u.to_string())
                 .unwrap_or_else(|| url.clone());
-            IngestError::Validation(format!(
-                "request to {} failed with status {}",
-                url, status
-            ))
+            IngestError::Validation(format!("request to {} failed with status {}", url, status))
         })?;
         let resp: serde_json::Value = resp
             .json()
@@ -99,10 +96,7 @@ pub mod binance {
                     .get("quoteAsset")
                     .and_then(|v| v.as_str())
                     .unwrap_or_default();
-                let status = sym
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let status = sym.get("status").and_then(|v| v.as_str()).unwrap_or("");
                 if status != "TRADING" {
                     continue;
                 }
@@ -153,7 +147,16 @@ pub mod binance {
         ) -> Result<(), IngestError> {
             let mut symbols = cfg.symbols.clone();
             if symbols.is_empty() {
-                symbols = discover_symbols(&cfg).await?;
+                if let Err(e) = discover_symbols(&cfg).await.map(|s| symbols = s) {
+                    tracing::warn!(
+                        "symbol discovery failed for {}: {}. Provide a `symbols` list in config to disable discovery",
+                        cfg.name,
+                        e
+                    );
+                }
+            }
+            if symbols.is_empty() {
+                return Ok(());
             }
             let streams = build_streams(&cfg, &symbols);
             if streams.is_empty() {
@@ -213,7 +216,7 @@ pub mod binance {
         payload: serde_json::Value,
         cfg: &VenueConfig,
         tx: &Sender<NormalizedEvent>,
-        ) -> Result<(), IngestError> {
+    ) -> Result<(), IngestError> {
         let symbol = payload
             .get("s")
             .and_then(|v| v.as_str())
