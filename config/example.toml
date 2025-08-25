@@ -1,3 +1,5 @@
+# Example config that bypasses symbol discovery.
+# Specify symbols manually when automatic discovery is blocked.
 [[venues]]
 name = "binance"
 symbols = ["BTCUSDT", "ETHUSDT"]

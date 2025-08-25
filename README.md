@@ -37,3 +37,5 @@ cargo test -p ops -- --ignored
 ```
 
 Configuration example enabling BTCUSDT and ETHUSDT ingestion can be found in `config/example.toml`.
+
+Symbol discovery relies on exchange REST APIs. If discovery fails (for example, due to blocked network access), the venue is skipped with a warning. To ingest anyway, supply a static `symbols` list in the config to bypass discovery.
