@@ -177,38 +177,92 @@ pub mod binance {
                     streams.join("/")
                 )
             };
-
-            let (ws_stream, _) = connect_async(&url)
-                .await
-                .map_err(|e| IngestError::Validation(e.to_string()))?;
-            let (_, mut read) = ws_stream.split();
-
-            while let Some(msg) = read.next().await {
-                let msg = msg.map_err(|e| IngestError::Validation(e.to_string()))?;
-                if !msg.is_text() {
-                    continue;
-                }
-                let text = msg
-                    .into_text()
-                    .map_err(|e| IngestError::Validation(e.to_string()))?;
-                let value: serde_json::Value = serde_json::from_str(&text)?;
-
-                // Combined stream messages include a `data` field. For aggregated
-                // streams `data` may be an array.
-                if let Some(data) = value.get("data") {
-                    if let Some(arr) = data.as_array() {
-                        for item in arr {
-                            process_payload(item.clone(), &cfg, &tx).await?;
-                        }
-                    } else {
-                        process_payload(data.clone(), &cfg, &tx).await?;
+            let base_backoff_ms = std::env::var("WS_RETRY_BASE_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(500);
+            let max_backoff_ms = std::env::var("WS_RETRY_MAX_MS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(30_000);
+            let mut backoff = std::time::Duration::from_millis(base_backoff_ms);
+            loop {
+                let (ws_stream, _) = match connect_async(&url).await {
+                    Ok(stream) => {
+                        backoff = std::time::Duration::from_millis(base_backoff_ms);
+                        stream
                     }
-                } else {
-                    process_payload(value, &cfg, &tx).await?;
-                }
-            }
+                    Err(e) => {
+                        tracing::warn!(
+                            "connect error for {}: {}. retrying in {:?}",
+                            cfg.name,
+                            e,
+                            backoff
+                        );
+                        tokio::select! {
+                            _ = tokio::time::sleep(backoff) => {},
+                            _ = tx.closed() => return Ok(()),
+                        }
+                        backoff = std::cmp::min(
+                            backoff * 2,
+                            std::time::Duration::from_millis(max_backoff_ms),
+                        );
+                        continue;
+                    }
+                };
+                let (_, mut read) = ws_stream.split();
 
-            Ok(())
+                loop {
+                    tokio::select! {
+                        _ = tx.closed() => return Ok(()),
+                        msg = read.next() => {
+                            match msg {
+                                Some(Ok(msg)) => {
+                                    if !msg.is_text() {
+                                        continue;
+                                    }
+                                    let text = msg
+                                        .into_text()
+                                        .map_err(|e| IngestError::Validation(e.to_string()))?;
+                                    let value: serde_json::Value = serde_json::from_str(&text)?;
+
+                                    // Combined stream messages include a `data` field. For aggregated
+                                    // streams `data` may be an array.
+                                    if let Some(data) = value.get("data") {
+                                        if let Some(arr) = data.as_array() {
+                                            for item in arr {
+                                                process_payload(item.clone(), &cfg, &tx).await?;
+                                            }
+                                        } else {
+                                            process_payload(data.clone(), &cfg, &tx).await?;
+                                        }
+                                    } else {
+                                        process_payload(value, &cfg, &tx).await?;
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    tracing::warn!("read error for {}: {}", cfg.name, e);
+                                    break;
+                                }
+                                None => {
+                                    tracing::info!("stream for {} closed", cfg.name);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                tracing::info!("reconnecting to {}", cfg.name);
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {},
+                    _ = tx.closed() => return Ok(()),
+                }
+                backoff = std::cmp::min(
+                    backoff * 2,
+                    std::time::Duration::from_millis(max_backoff_ms),
+                );
+            }
         }
     }
 
