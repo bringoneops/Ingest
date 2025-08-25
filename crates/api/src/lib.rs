@@ -1,47 +1,49 @@
 use ingest_core::event::NormalizedEvent;
-use crossbeam_queue::ArrayQueue;
-use std::sync::Arc;
+use tokio::sync::broadcast;
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 pub struct EventBus {
-    queue: Arc<ArrayQueue<NormalizedEvent>>,
+    tx: broadcast::Sender<NormalizedEvent>,
 }
 
 impl EventBus {
     pub fn new(capacity: usize) -> Self {
-        Self { queue: Arc::new(ArrayQueue::new(capacity)) }
+        let (tx, _rx) = broadcast::channel(capacity);
+        Self { tx }
     }
 
     pub fn publisher(&self) -> EventPublisher {
-        EventPublisher { queue: self.queue.clone() }
+        EventPublisher { tx: self.tx.clone() }
     }
 
     pub fn subscribe(&self) -> EventConsumer {
-        EventConsumer { queue: self.queue.clone() }
+        EventConsumer { rx: self.tx.subscribe() }
+    }
+
+    /// Subscribe to events as an asynchronous stream.
+    pub fn subscribe_stream(&self) -> impl Stream<Item = NormalizedEvent> {
+        BroadcastStream::new(self.tx.subscribe()).filter_map(|res| res.ok())
     }
 }
 
 #[derive(Clone)]
 pub struct EventPublisher {
-    queue: Arc<ArrayQueue<NormalizedEvent>>,
+    tx: broadcast::Sender<NormalizedEvent>,
 }
 
 impl EventPublisher {
     pub fn publish(&self, event: NormalizedEvent) {
-        if self.queue.push(event.clone()).is_err() {
-            // drop oldest
-            let _ = self.queue.pop();
-            let _ = self.queue.push(event);
-        }
+        let _ = self.tx.send(event);
     }
 }
 
 pub struct EventConsumer {
-    queue: Arc<ArrayQueue<NormalizedEvent>>,
+    rx: broadcast::Receiver<NormalizedEvent>,
 }
 
 impl EventConsumer {
-    pub fn poll(&self) -> Option<NormalizedEvent> {
-        self.queue.pop()
+    pub async fn recv(&mut self) -> Option<NormalizedEvent> {
+        self.rx.recv().await.ok()
     }
 }
 
@@ -49,18 +51,19 @@ impl EventConsumer {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use tokio_stream::StreamExt;
 
-    #[test]
-    fn queue_roundtrip() {
+    #[tokio::test]
+    async fn queue_roundtrip() {
         let bus = EventBus::new(1);
         let pubr = bus.publisher();
-        let cons = bus.subscribe();
+        let mut stream = bus.subscribe_stream();
         pubr.publish(NormalizedEvent {
             venue: "x".into(),
             symbol: "y".into(),
             timestamp: Utc::now(),
             payload: serde_json::json!({}),
         });
-        assert!(cons.poll().is_some());
+        assert!(stream.next().await.is_some());
     }
 }
