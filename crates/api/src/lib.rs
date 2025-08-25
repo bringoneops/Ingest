@@ -1,22 +1,29 @@
-use ingest_core::event::NormalizedEvent;
 use crossbeam_queue::ArrayQueue;
+use ingest_core::event::NormalizedEvent;
 use std::sync::Arc;
 
+#[derive(Clone)]
 pub struct EventBus {
     queue: Arc<ArrayQueue<NormalizedEvent>>,
 }
 
 impl EventBus {
     pub fn new(capacity: usize) -> Self {
-        Self { queue: Arc::new(ArrayQueue::new(capacity)) }
+        Self {
+            queue: Arc::new(ArrayQueue::new(capacity)),
+        }
     }
 
     pub fn publisher(&self) -> EventPublisher {
-        EventPublisher { queue: self.queue.clone() }
+        EventPublisher {
+            queue: self.queue.clone(),
+        }
     }
 
     pub fn subscribe(&self) -> EventConsumer {
-        EventConsumer { queue: self.queue.clone() }
+        EventConsumer {
+            queue: self.queue.clone(),
+        }
     }
 }
 

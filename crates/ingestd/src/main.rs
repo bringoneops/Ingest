@@ -1,10 +1,10 @@
-use std::{env, fs, net::SocketAddr, time::Duration};
+use std::{env, fs, net::SocketAddr};
 
 use agents::{binance::BinanceAdapter, Adapter};
 use api::EventBus;
 use ingest_core::config::Config;
 use ops::OpsServer;
-use tokio::{sync::mpsc, time::sleep};
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,18 +14,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let bus = EventBus::new(1024);
     let publisher = bus.publisher();
-    let consumer = bus.subscribe();
-    let log_handle = tokio::spawn(async move {
-        loop {
-            if let Some(evt) = consumer.poll() {
-                println!("event: {:?}", evt);
-            } else {
-                sleep(Duration::from_millis(100)).await;
-            }
-        }
-    });
 
-    let ops = OpsServer::new();
+    let ops = OpsServer::new(bus.clone());
     let ops_addr: SocketAddr = "127.0.0.1:3000".parse().unwrap();
     let ops_handle = tokio::spawn(ops.run(ops_addr));
 
@@ -46,6 +36,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let _ = tokio::join!(ops_handle, forward_handle, log_handle);
+    let _ = tokio::join!(ops_handle, forward_handle);
     Ok(())
 }
