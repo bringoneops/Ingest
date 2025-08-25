@@ -1,5 +1,6 @@
-use ingest_core::event::NormalizedEvent;
 use crossbeam_queue::ArrayQueue;
+use ingest_core::event::NormalizedEvent;
+use ops::EVENTS_PROCESSED_TOTAL;
 use std::sync::Arc;
 
 pub struct EventBus {
@@ -8,15 +9,21 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new(capacity: usize) -> Self {
-        Self { queue: Arc::new(ArrayQueue::new(capacity)) }
+        Self {
+            queue: Arc::new(ArrayQueue::new(capacity)),
+        }
     }
 
     pub fn publisher(&self) -> EventPublisher {
-        EventPublisher { queue: self.queue.clone() }
+        EventPublisher {
+            queue: self.queue.clone(),
+        }
     }
 
     pub fn subscribe(&self) -> EventConsumer {
-        EventConsumer { queue: self.queue.clone() }
+        EventConsumer {
+            queue: self.queue.clone(),
+        }
     }
 }
 
@@ -32,6 +39,7 @@ impl EventPublisher {
             let _ = self.queue.pop();
             let _ = self.queue.push(event);
         }
+        EVENTS_PROCESSED_TOTAL.inc();
     }
 }
 

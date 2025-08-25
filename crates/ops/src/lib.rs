@@ -1,6 +1,10 @@
 use axum::{routing::get, Router};
-use prometheus::{Encoder, TextEncoder, Registry, IntCounter};
+use once_cell::sync::Lazy;
+use prometheus::{Encoder, IntCounter, Registry, TextEncoder};
 use std::net::SocketAddr;
+
+pub static EVENTS_PROCESSED_TOTAL: Lazy<IntCounter> =
+    Lazy::new(|| IntCounter::new("events_processed_total", "total events processed").unwrap());
 
 pub struct OpsServer {
     pub registry: Registry,
@@ -12,6 +16,9 @@ impl OpsServer {
         let registry = Registry::new();
         let requests = IntCounter::new("requests_total", "total requests").unwrap();
         registry.register(Box::new(requests.clone())).unwrap();
+        registry
+            .register(Box::new(EVENTS_PROCESSED_TOTAL.clone()))
+            .unwrap();
         Self { registry, requests }
     }
 
@@ -37,6 +44,7 @@ async fn metrics(registry: Registry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EVENTS_PROCESSED_TOTAL;
 
     #[tokio::test]
     async fn health_check() {
@@ -44,7 +52,21 @@ mod tests {
         tokio::spawn(server.run("127.0.0.1:3001".parse().unwrap()));
         // give server time to start
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let body = reqwest::get("http://127.0.0.1:3001/health").await.unwrap().text().await.unwrap();
+        let body = reqwest::get("http://127.0.0.1:3001/health")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
         assert_eq!(body, "ok");
+
+        EVENTS_PROCESSED_TOTAL.inc();
+        let metrics = reqwest::get("http://127.0.0.1:3001/metrics")
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(metrics.contains("events_processed_total"));
     }
 }
