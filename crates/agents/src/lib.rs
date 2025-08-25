@@ -56,12 +56,18 @@ pub mod binance {
             .clone()
             .ok_or_else(|| IngestError::Validation("rest_base required".into()))?;
         let url = format!("{}/exchangeInfo", base.trim_end_matches('/'));
-        let client = Client::new();
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| IngestError::Validation(format!("{}: {}", url, e)))?;
+        let timeout = cfg.http_timeout_secs.unwrap_or(10);
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(timeout))
+            .build()
+            .map_err(|e| IngestError::Validation(e.to_string()))?;
+        let resp = client.get(&url).send().await.map_err(|e| {
+            if e.is_timeout() {
+                IngestError::Validation(format!("request to {} timed out", url))
+            } else {
+                IngestError::Validation(format!("{}: {}", url, e))
+            }
+        })?;
         let resp = resp.error_for_status().map_err(|e| {
             let status = e
                 .status()
@@ -73,10 +79,13 @@ pub mod binance {
                 .unwrap_or_else(|| url.clone());
             IngestError::Validation(format!("request to {} failed with status {}", url, status))
         })?;
-        let resp: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| IngestError::Validation(format!("{}: {}", url, e)))?;
+        let resp: serde_json::Value = resp.json().await.map_err(|e| {
+            if e.is_timeout() {
+                IngestError::Validation(format!("request to {} timed out", url))
+            } else {
+                IngestError::Validation(format!("{}: {}", url, e))
+            }
+        })?;
         let mut symbols = Vec::new();
         let include_re = if disc.quote_whitelist.is_empty() {
             None
@@ -305,6 +314,7 @@ pub mod binance {
                 discover: false,
                 ws_base: None,
                 rest_base: None,
+                http_timeout_secs: None,
                 channels: ingest_core::config::ChannelConfig {
                     trades: true,
                     ticker: Some(ingest_core::config::TickerConfig {
@@ -357,6 +367,20 @@ pub mod binance {
             (format!("http://{}", addr), handle)
         }
 
+        async fn start_timeout_server() -> (String, tokio::task::JoinHandle<()>) {
+            let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let handle = tokio::spawn(async move {
+                if let Ok((mut socket, _)) = listener.accept().await {
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    let _ = socket.shutdown().await;
+                }
+            });
+            (format!("http://{}", addr), handle)
+        }
+
         #[tokio::test]
         async fn discover_symbols_reports_404() {
             let (base, handle) = start_mock_server(404).await;
@@ -392,6 +416,28 @@ pub mod binance {
             match err {
                 IngestError::Validation(msg) => {
                     assert!(msg.contains("451"));
+                    assert!(msg.contains(&format!("{}/exchangeInfo", base.trim_end_matches('/'))));
+                }
+                _ => panic!("expected validation error"),
+            }
+            handle.abort();
+        }
+
+        #[tokio::test]
+        async fn discover_symbols_times_out_for_unreachable_host() {
+            let (base, handle) = start_timeout_server().await;
+            let mut cfg = base_cfg();
+            cfg.rest_base = Some(base.clone());
+            cfg.discovery = Some(DiscoveryConfig {
+                enabled: true,
+                quote_whitelist: vec![],
+                symbol_blacklist: vec![],
+            });
+            cfg.http_timeout_secs = Some(1);
+            let err = discover_symbols(&cfg).await.unwrap_err();
+            match err {
+                IngestError::Validation(msg) => {
+                    assert!(msg.contains("timed out"));
                     assert!(msg.contains(&format!("{}/exchangeInfo", base.trim_end_matches('/'))));
                 }
                 _ => panic!("expected validation error"),

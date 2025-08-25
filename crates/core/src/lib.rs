@@ -30,6 +30,8 @@ pub mod config {
         #[serde(default)]
         pub rest_base: Option<String>,
         #[serde(default)]
+        pub http_timeout_secs: Option<u64>,
+        #[serde(default)]
         pub channels: ChannelConfig,
         #[serde(default)]
         pub discovery: Option<DiscoveryConfig>,
@@ -127,6 +129,10 @@ pub mod config {
                             .get("rest_base")
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
+                        let http_timeout_secs = cfg
+                            .get("http_timeout_secs")
+                            .and_then(|v| v.as_integer())
+                            .map(|v| v as u64);
                         let channels: ChannelConfig = cfg
                             .get("channels")
                             .cloned()
@@ -136,7 +142,13 @@ pub mod config {
                             .get("discovery")
                             .cloned()
                             .map(|v| v.try_into().unwrap_or_default())
-                            .or_else(|| if discover { Some(global_discovery.clone()) } else { None });
+                            .or_else(|| {
+                                if discover {
+                                    Some(global_discovery.clone())
+                                } else {
+                                    None
+                                }
+                            });
 
                         venues.push(VenueConfig {
                             name: name.clone(),
@@ -144,6 +156,7 @@ pub mod config {
                             discover,
                             ws_base,
                             rest_base,
+                            http_timeout_secs,
                             channels,
                             discovery,
                         });
